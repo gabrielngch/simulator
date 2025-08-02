@@ -2,18 +2,21 @@
 
 import csv
 import heapq
+import json
+import logging
+import os
+import dotenv
+import zmq
 
 from datetime import datetime, UTC
 
-BINANCE_FORMAT = [
-    "binanceusdm_{ticker}_aggTrade_{date}",
-    "binanceusdm_{ticker}_depth20_{date}",
-    "binanceusdm_{ticker}_bookticker_{date}",
-]
-HYPERLIQUID_FORMAT = [
-    "hyperliquid_{ticker}_trades_{date}",
-    "hyperliquid_{ticker}_l2Book_{date}",
-]
+dotenv.load_dotenv()
+
+try:
+    BINANCE_ZMQ = os.environ["BINANCE_ZMQ"]
+    HYPERLIQUID_ZMQ = os.environ["HYPERLIQUID_ZMQ"]
+except KeyError as e:
+    logging.error(f"Copy the .env_example file, {e}")
 
 """
 TODO notes:
@@ -35,6 +38,12 @@ def queue_data(ticker: str, date: datetime):
     Returns:
         None.
     """
+    # zmq connections to proxy sockets
+    context = zmq.Context()
+    binance_socket = context.socket(zmq.PUB)
+    binance_socket.connect(BINANCE_ZMQ)
+    hyperliquid_socket = context.socket(zmq.PUB)
+    hyperliquid_socket.connect(HYPERLIQUID_ZMQ)
     
     # formatting
     ticker = ticker.lower()
@@ -62,16 +71,17 @@ def queue_data(ticker: str, date: datetime):
             heapq.heappush(heap, (timestamp, k, row))
 
         except StopIteration:
-            continue #empty file
+            logging.error(f"{k} file at {date} for ticker {ticker} is empty")
+            return
 
     while heap:
         timestamp, key, row = heapq.heappop(heap)
         match key:
             # send data through websocket here
             case "binance_trades":
-                print(row)
+                binance_trades_callback(timestamp, ticker, row, binance_socket)
             case "binance_l1":
-                print(row)
+                binance_l1_callback(timestamp, ticker, row, binance_socket)
             case _:
                 pass
         
@@ -80,8 +90,48 @@ def queue_data(ticker: str, date: datetime):
             next_timestamp = int(next_row[3])
             heapq.heappush(heap, (next_timestamp, k, next_row))
         except StopIteration:
-            continue #exhausted file
+            continue # exhausted file
+
+def binance_trades_callback(timestamp, ticker, row, socket):
+    message = {
+        "e": "aggTrade",  # Event type
+        "E": timestamp,   # Event time
+        "s": f"{ticker.upper()}USDT",  # Symbol
+        "a": int(row[4]),  # Aggregate trade ID
+        "p": row[5],       # Price
+        "q": row[6],       # Quantity
+        "f": int(row[7]),  # First trade ID
+        "l": int(row[8]),  # Last trade ID
+        "T": int(row[3]),  # Trade time
+        "m": row[9] == "True",  # Is buyer maker
+        "M": True          # Ignore
+    }
+    socket.send_string(json.dumps(message))
+
+def binance_l1_callback(timestamp, ticker, row, socket):
+    message = {
+        "e": "bookTicker",  # Event type
+        "E": timestamp,     # Event time
+        "s": f"{ticker.upper()}USDT",  # Symbol
+        "b": row[4],        # Best bid price
+        "B": row[5],        # Best bid quantity
+        "a": row[6],        # Best ask price
+        "A": row[7],        # Best ask quantity
+        "T": timestamp,     # Transaction time
+        "u": timestamp      # Update ID
+    }
+    socket.send_string(json.dumps(message))
+
+def binance_l2_callback(data, socket):
+    pass
+
+def hyperliquid_trades_callback(data, socket):
+    pass
+
+def hyperliquid_l2_callback(data, socket):
+    pass
 
 if __name__ == "__main__":
     queue_data("sol", datetime(2025,6,18,tzinfo=UTC))
+
 
