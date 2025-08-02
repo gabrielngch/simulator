@@ -58,7 +58,7 @@ def queue_data(ticker: str, date: datetime):
         readers[k] = reader
         try:
             row = next(reader)
-            timestamp = int(row[3])
+            timestamp = int(row[3]) # simulate latency here
             heapq.heappush(heap, (timestamp, k, row))
 
         except StopIteration:
@@ -67,6 +67,7 @@ def queue_data(ticker: str, date: datetime):
     while heap:
         timestamp, key, row = heapq.heappop(heap)
         match key:
+            # send data through websocket here
             case "binance_trades":
                 print(row)
             case "binance_l1":
